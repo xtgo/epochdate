@@ -175,3 +175,88 @@ func TestDate_UnmarshalJSON_null(t *testing.T) {
 			data, input, date, want)
 	}
 }
+
+func TestClamp(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    string // unused by non-clamping error results
+		wantErr bool   // unused by clamping results
+	}{
+		{
+			input:   "1969-12-31",
+			want:    "1970-01-01",
+			wantErr: true,
+		},
+		{
+			input:   "1970-01-01",
+			want:    "1970-01-01",
+			wantErr: false,
+		},
+		{
+			input:   "2019-07-11",
+			want:    "2019-07-11",
+			wantErr: false,
+		},
+		{
+			input:   "2149-06-06",
+			want:    "2149-06-06",
+			wantErr: false,
+		},
+		{
+			input:   "2149-06-07",
+			want:    "2149-06-06",
+			wantErr: true,
+		},
+	}
+
+	t.Run("normal", func(t *testing.T) {
+		for _, tt := range tests {
+			t.Run(tt.input, func(t *testing.T) {
+				got, err := ParseRFC(tt.input)
+				switch {
+				case tt.wantErr && err == nil:
+					t.Errorf("ParseRFC(%q) = nil [err], want error", tt.input)
+
+				case !tt.wantErr && err != nil:
+					t.Errorf("ParseRFC(%q) = %q [err], want nil", tt.input, err)
+
+				case err != nil && got != 0:
+					t.Errorf("ParseRFC(%q) = %q, want %q", tt.input, got, Date(0))
+
+				case err == nil && got != MustParseRFC(tt.want):
+					t.Errorf("ParseRFC(%q) = %q, want %q", tt.input, got, tt.want)
+				}
+			})
+		}
+	})
+
+	t.Run("clamp", func(t *testing.T) {
+		Clamp = true
+		defer func() { Clamp = false }()
+
+		for _, tt := range tests {
+			t.Run(tt.input, func(t *testing.T) {
+				got, err := ParseRFC(tt.input)
+				switch {
+				case err != nil:
+					t.Errorf("ParseRFC(%q) = %q, want nil", tt.input, err)
+
+				case got != MustParseRFC(tt.want):
+					t.Errorf("ParseRFC(%q) = %q, want %q", tt.input, got, tt.want)
+
+				case got == 0 && !got.IsZero():
+					t.Errorf("%q.IsZero() = false, want true", tt.input)
+
+				case got.IsZero() != got.IsMin():
+					t.Errorf("%q.IsZero() != %[1]q.IsMin()", tt.input)
+
+				case got.IsMin() && got.IsMax():
+					t.Errorf("%q.IsMin() && %[1]q.IsMax()", tt.input)
+
+				case got == maxDate && !got.IsMax():
+					t.Errorf("%q.IsMax() = false, want true", tt.input)
+				}
+			})
+		}
+	})
+}
