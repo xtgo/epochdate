@@ -30,10 +30,19 @@ import (
 	"time"
 )
 
+// Clamp will use the nearest representable date if the input is out of
+// range but otherwise a correct time.Time or parseable string. When false,
+// parsing or conversion will return an error when the input represents an
+// out-of-range date. This does not affect the wrap-around behavior of
+// arithemtic on the underlying uint16 value.
+var Clamp = false
+
 const (
 	day      = 60 * 60 * 24
 	nsPerSec = 1e9
-	maxUnix  = (1<<16)*day - 1
+	bits     = 16
+	maxUnix  = (1<<bits)*day - 1
+	maxDate  = 1<<bits - 1
 )
 
 // Format constants, for use with Parse and the Date.Format method.
@@ -71,12 +80,39 @@ func TodayUTC() Date {
 
 // Parse follows the same semantics as time.Parse, but ignores time-of-day
 // information and returns a Date value.
-func Parse(layout, value string) (d Date, err error) {
+func Parse(layout, value string) (Date, error) {
 	t, err := time.Parse(layout, value)
-	if err == nil {
-		d, err = NewFromTime(t)
+	if err != nil {
+		return 0, err
 	}
-	return
+	return NewFromTime(t)
+}
+
+// ParseRFC is like Parse, except that the layout is fixed to RFC3339.
+func ParseRFC(value string) (Date, error) {
+	t, err := time.Parse(RFC3339, value)
+	if err != nil {
+		return 0, err
+	}
+	return NewFromTime(t)
+}
+
+// MustParse is like Parse, except that it panics if an error occurs.
+func MustParse(layout, value string) Date {
+	d, err := Parse(layout, value)
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
+// MustParseRFC is like ParseRFC, except that it panics if an error occurs.
+func MustParseRFC(value string) Date {
+	d, err := ParseRFC(value)
+	if err != nil {
+		panic(err)
+	}
+	return d
 }
 
 // NewFromTime returns a Date equivalent to NewFromDate(t.Date()),
@@ -99,13 +135,19 @@ func NewFromDate(year int, month time.Month, day int) (Date, error) {
 // specifically desired (returning the date in one location at the given time
 // instant in another location), it's best to use epochdate.NewFromTime(t),
 // which normalizes the resulting Date value by adjusting for zone offsets.
-func NewFromUnix(seconds int64) (d Date, err error) {
-	if UnixInRange(seconds) {
-		d = Date(seconds / day)
-	} else {
-		err = ErrOutOfRange
+func NewFromUnix(seconds int64) (Date, error) {
+	switch {
+	case UnixInRange(seconds):
+		return Date(seconds / day), nil
+
+	case Clamp && seconds < 0:
+		return 0, nil
+
+	case Clamp && seconds > maxUnix:
+		return maxDate, nil
 	}
-	return
+
+	return 0, ErrOutOfRange
 }
 
 // UnixInRange is true if the provided Unix timestamp is in Date's
@@ -132,6 +174,22 @@ func (d Date) Unix() int64 {
 // returns elapsed nanoseconds.
 func (d Date) UnixNano() int64 {
 	return int64(d) * day * nsPerSec
+}
+
+// IsZero returns true if d represents the zero value for the Date type.
+func (d Date) IsZero() bool {
+	return d == 0
+}
+
+// IsMin returns true if d represents the minimum representable date.
+// Equivalent to IsZero.
+func (d Date) IsMin() bool {
+	return d == 0
+}
+
+// IsMax returns true if d represents the maximum representable date.
+func (d Date) IsMax() bool {
+	return d == maxDate
 }
 
 // Format is identical to time.Time.Format, except that any time-of-day format
@@ -170,9 +228,12 @@ func (d Date) MarshalText() ([]byte, error) {
 
 // UnmarshalText implements encoding.TextUnmarshaler.
 func (d *Date) UnmarshalText(data []byte) error {
-	var err error
-	*d, err = Parse(RFC3339, string(data))
-	return err
+	v, err := ParseRFC(string(data))
+	if err != nil {
+		return err
+	}
+	*d = v
+	return nil
 }
 
 // MarshalJSON implements json.Marshaler.
