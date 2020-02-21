@@ -4,80 +4,44 @@ epochdate is a small library for storing contemporary dates (without
 time-of-day information) in 2 bytes per date, instead of the 16-20 bytes that
 are used by a time.Time value from the Go standard library.
 
-epochdate.Date is a uint16 value representing the number of days since
-Jan 1 1970. The maximum representable date is Jun 6 2149. Arithmetical
-operations react predictably. 
+epochdate.Date is a uint16 value representing the number of days since Jan 1
+1970, with each value representing a whole calendar day. The maximum
+representable Date is Jun 6 2149. epochdate.YearMonth is a uint16 value
+representing the number of whole months Jan 1 1970, with each value
+representing a whole calendar month. The maximum representable YearMonth is Apr
+7431, though for interoperability with Date, values above May or June 2149
+should not be used.
 
-	import (
-		"github.com/extemporalgenome/epochdate"
-		"time"
-	)
-	
-	var (
-		today     = epochdate.Today()
-		yesterday = today - 1
-		tomorrow  = today + 1
-		fortnight = today + 7*2
-	)
+Arithmetical operations on these types react predictably, for example,
+incrementing a Date is equivalent to "the following day," while adding 12 to a
+YearMonth is equivalent to "same month of the following year."
 
-## Converting to Date values
+## YearMonth operations
 
-	assert := func(condition bool) { if !condition { panic("assertion failed") } }
+YearMonth enables simple date or time-alignment around month boundaries, for example:
 
-	d1, _ := epochdate.Parse(epochdate.RFC3339, "2012-03-10")
-	d2, _ := epochdate.NewFromDate(2012, 3, 10)
-	assert(d1 == d2)
+    // first day of current month
+    TodayUTC().YearMonth().StartDate()
 
-	times := []string{
-		// Any time of the same day forms an equivalent epochdate value
-		"2012-03-10T00:00:00Z",
-		"2012-03-10T23:59:59Z",
+    // last day of current month
+    TodayUTC().YearMonth().EndDate()
 
-		// And this is relative to location -- even locations that are
-		// 26 hours apart (politics) will result in the same epochdate value
-		// (in each location, the date at the given instant *is* 2012-03-10)
-		"2012-03-10T00:00:00-12:00",
-		"2012-03-10T00:00:00+14:00",
-	}
+    // first day of next month
+    TodayUTC().YearMonth().EndDate() + 1
 
-	for _, str := range times {
-		t, _ := time.Parse(time.RFC3339, str)
-		d, _ := epochdate.NewFromTime(t)
-		assert(d == d1)
-	}
+    // ... or equivalently
+    (TodayUTC().YearMonth() + 1).StartDate()
 
-	t1, _ := time.Parse(time.RFC3339, "2012-03-10T00:00:00-12:00")
-	t2, _ := time.Parse(time.RFC3339, "2012-03-10T00:00:00+14:00")
+    // last time instant of the current month
+    TodayUTC().YearMonth.EndTime()
 
-	d1, _ := epochdate.NewFromUnix(t1.Unix())
-	d2, _ := epochdate.NewFromUnix(t2.Unix())
+## Encoding/Decoding
 
-	// t1.Unix() returns seconds since the Unix epoch relative to UTC!
-	// Because t1 and t2 represent very different time instants
-	// (26 hours apart), don't expect passing those timestamps to NewFromUnix
-	// to result in the same date; unless you know what you're doing, use the
-	// other "New" functions instead, which normalize timezones.
-	assert(d1 != d2)
+Both Date and YearMonth can be encoded to and from JSON, XML, and other string inputs.
 
-## Converting from Date values
+Date values can be encoded to or from RFC-3339 dates (i.e. "2020-01-26")
 
-	var (
-		d, _                = epochdate.Parse(epochdate.RFC3339, "2012-03-10")
-		t, _                = time.Parse(time.RFC3339, "2012-03-10T00:00:00Z")
-		year1, month1, day1 = d.Date()
-		year2, month2, day2 = t.Date()
-	)
-	assert(year1 == year2 && month1 == month2 && day1 == day2)
-	assert(t.Equal(d.UTC()) == true)
-
-	// epochdate's Local and In methods return times adjusted to midnight on
-	// that date in the given timezone.
-	assert(t.Equal(d.Local()) == false)
-
-	// So if you want the local time at the instant that it was midnight on
-	// that date relative to UTC, do d.UTC().Local(). Conversely, the UTC time
-	// at the instant that it was midnight on the given date in the local
-	// timezone is expressed as: d.Local().UTC()
-
-	// Date values print nicely
-	assert(d.String() == "2012-03-10")
+YearDate values encode to a partial RFC-3339 date (i.e. "2020-01"), and can be
+decoded from either that same partial format, or a full date (i.e.
+"2020-01-26"), in which case the day portion of the input will be validated and
+discarded.
