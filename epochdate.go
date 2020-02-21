@@ -22,6 +22,21 @@
 // All functions and methods with the same names as those found in the stdlib
 // time package have identical semantics in epochdate, with the exception that
 // epochdate truncates time-of-day information.
+//
+// epochdate does not handle leap seconds, and is thus generally follows the
+// behavior of the standard library time package, which it uses for
+// translating to and from Date and YearMonth values, parsing, and
+// formatting.
+//
+// epochdate does not handle leap seconds, which may result in a low risk of
+// date inconsistencies when calling New/ClampFromUnix directly, if that
+// timestamp falls on the zeroth second of a day more than six months in the
+// future. In particular, if that second was selected as a leap second, the
+// initial call may result in a value one lower than if that same call were
+// made after the leap second had been amended into the standard library
+// time package. Using New/ClampFromTime and New/ClampFromDate should
+// prevent such a discrepancy.
+//
 package epochdate
 
 import (
@@ -34,13 +49,19 @@ import (
 // range but otherwise a correct time.Time or parseable string. When false,
 // parsing or conversion will return an error when the input represents an
 // out-of-range date. This does not affect the wrap-around behavior of
-// arithemtic on the underlying uint16 value.
+// arithmetic on the underlying uint16 value. For compatibility reasons, the
+// default value of this package is false.
+//
+// Consider using the ClampFrom* functions instead of NewFrom* when clamping
+// behavior is desired, as the ClampFrom* variants do not depend on the
+// value of this variable.
 var Clamp = false
 
 const (
 	day      = 60 * 60 * 24
 	nsPerSec = 1e9
 	bits     = 16
+	minYear  = 1970
 	maxUnix  = (1<<bits)*day - 1
 	maxDate  = 1<<bits - 1
 )
@@ -55,18 +76,11 @@ const (
 // ErrOutOfRange is returned if the input date is not a representable Date.
 var ErrOutOfRange = errors.New("epochdate: dates must be in the range [1970-01-01,2149-06-06]")
 
-// Date stores the number of days since Jan 1, 1970. The last representable
-// date is June 6, 2149.
-type Date uint16
-
 // Today returns the local date at this instant. If the local date does not
 // fall within the representable range, then then zero value will be returned
 // (1970-01-01).
 func Today() Date {
-	date, err := NewFromTime(time.Now())
-	if err != nil {
-		return 0
-	}
+	date, _ := NewFromTime(time.Now())
 	return date
 }
 
@@ -115,18 +129,63 @@ func MustParseRFC(value string) Date {
 	return d
 }
 
+// ClampFromTime behaves like NewFromTime, except that it clamps
+// out-of-range dates rather than returning an error. This means that either
+// range errors are undetectable, or the representable date range must be
+// reduced by one value on each extreme (this 1970-01-01 and 2149-06-06
+// could be considered errors, if error handling is needed).
+//
+func ClampFromTime(t time.Time) Date {
+	s := t.Unix()
+	_, offset := t.Zone()
+	return ClampFromUnix(s + int64(offset))
+}
+
 // NewFromTime returns a Date equivalent to NewFromDate(t.Date()),
 // where t is a time.Time object.
+//
 func NewFromTime(t time.Time) (Date, error) {
 	s := t.Unix()
 	_, offset := t.Zone()
 	return NewFromUnix(s + int64(offset))
 }
 
+// ClampFromDate behaves like NewFromDate, except that it clamps
+// out-of-range dates rather than returning an error. This means that either
+// range errors are undetectable, or the representable date range must be
+// reduced by one value on each extreme (this 1970-01-01 and 2149-06-06
+// could be considered errors, if error handling is needed).
+//
+func ClampFromDate(year int, month time.Month, day int) Date {
+	return ClampFromUnix(time.Date(year, month, day, 0, 0, 0, 0, time.UTC).Unix())
+}
+
 // NewFromDate returns a Date value corresponding to the supplied
 // year, month, and day.
+//
 func NewFromDate(year int, month time.Month, day int) (Date, error) {
 	return NewFromUnix(time.Date(year, month, day, 0, 0, 0, 0, time.UTC).Unix())
+}
+
+// ClampFromUnix behaves like NewFromUnix, except that it clamps
+// out-of-range dates rather than returning an error. This means that either
+// range errors are undetectable, or the representable date range must be
+// reduced by one value on each extreme (this 1970-01-01 and 2149-06-06
+// could be considered errors, if error handling is needed).
+//
+// Please see package documentation regarding leap seconds when using this
+// function.
+//
+func ClampFromUnix(seconds int64) Date {
+	switch {
+	case seconds < 0:
+		return 0
+
+	case seconds > maxUnix:
+		return maxDate
+	}
+
+	return Date(seconds / day)
 }
 
 // NewFromUnix creates a Date from a Unix timestamp, relative to any location
@@ -135,6 +194,10 @@ func NewFromDate(year int, month time.Month, day int) (Date, error) {
 // specifically desired (returning the date in one location at the given time
 // instant in another location), it's best to use epochdate.NewFromTime(t),
 // which normalizes the resulting Date value by adjusting for zone offsets.
+//
+// Please see package documentation regarding leap seconds when using this
+// function.
+//
 func NewFromUnix(seconds int64) (Date, error) {
 	switch {
 	case UnixInRange(seconds):
@@ -154,9 +217,14 @@ func NewFromUnix(seconds int64) (Date, error) {
 // representable range. The timestamp is interpreted according to the semantics
 // used by NewFromUnix. You probably won't need to use this, since this will
 // only return false if NewFromUnix returns an error of ErrOutOfRange.
+//
 func UnixInRange(seconds int64) bool {
 	return seconds >= 0 && seconds <= maxUnix
 }
+
+// Date stores the number of days since Jan 1, 1970. The last representable
+// date is June 6, 2149.
+type Date uint16
 
 // Returns an RFC3339/ISO-8601 date string, of the form "2006-01-02".
 func (d Date) String() string {
@@ -166,14 +234,22 @@ func (d Date) String() string {
 // Unix returns the number of seconds elapsed since Jan 1 1970 UTC, from the
 // start of the given date value. In this case, the date is considered to be
 // a UTC date, rather than a location-independent date.
+//
 func (d Date) Unix() int64 {
 	return int64(d) * day
 }
 
 // UnixNano is semantically identical to the Unix method, except that it
 // returns elapsed nanoseconds.
+//
 func (d Date) UnixNano() int64 {
 	return int64(d) * day * nsPerSec
+}
+
+// YearMonth returns the YearMonth that corresponds to the receiver.
+func (d Date) YearMonth() YearMonth {
+	y, m, _ := d.Date()
+	return ClampYearMonth(y, m)
 }
 
 // IsZero returns true if d represents the zero value for the Date type.
@@ -183,6 +259,7 @@ func (d Date) IsZero() bool {
 
 // IsMin returns true if d represents the minimum representable date.
 // Equivalent to IsZero.
+//
 func (d Date) IsMin() bool {
 	return d == 0
 }
@@ -194,12 +271,14 @@ func (d Date) IsMax() bool {
 
 // Format is identical to time.Time.Format, except that any time-of-day format
 // specifiers that are used will be equivalent to "00:00:00Z".
+//
 func (d Date) Format(layout string) string {
 	return d.UTC().Format(layout)
 }
 
 // Date is semantically identical to the behavior of t.Date(), where t is a
 // time.Time value.
+//
 func (d Date) Date() (year int, month time.Month, day int) {
 	return d.UTC().Date()
 }
