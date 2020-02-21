@@ -19,6 +19,217 @@ var (
 	_ json.Unmarshaler         = new(Date)
 )
 
+func try(fn func()) (panicked bool) {
+	defer func() { panicked = recover() != nil }()
+	fn()
+	return false
+}
+
+func TestMustParse(t *testing.T) {
+	tests := []struct {
+		name      string
+		layout    string
+		input     string
+		want      Date
+		wantPanic bool
+	}{
+		{
+			name:      "bad_layout",
+			layout:    "blah",
+			input:     "2020-02-15",
+			wantPanic: true,
+		},
+		{
+			name:      "bad_input",
+			layout:    RFC3339,
+			input:     "blah",
+			wantPanic: true,
+		},
+		{
+			name:   "american_slash",
+			layout: "1/2/06",
+			input:  "3/26/19",
+			want:   ClampFromDate(2019, 3, 26),
+		},
+		{
+			name:   "zero",
+			layout: RFC3339,
+			input:  "1970-01-01",
+			want:   0,
+		},
+		{
+			name:   "max",
+			layout: RFC3339,
+			input:  "2149-06-06",
+			want:   maxDate,
+		},
+		{
+			name:      "underflow",
+			layout:    RFC3339,
+			input:     "1969-12-31",
+			wantPanic: true,
+		},
+		{
+			name:      "overflow",
+			layout:    RFC3339,
+			input:     "2149-06-07",
+			wantPanic: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got Date
+
+			panicked := try(func() { got = MustParse(tt.layout, tt.input) })
+			switch {
+			case !panicked && tt.wantPanic:
+				t.Errorf("MustParse(%q, %q) should not panicked", tt.layout, tt.input)
+
+			case panicked && !tt.wantPanic:
+				t.Errorf("MustParse(%q, %q) should not have panicked", tt.layout, tt.input)
+
+			case got != tt.want:
+				t.Errorf("MustParse(%q, %q) = %d, want %d", tt.layout, tt.input, got, tt.want)
+			}
+
+			if tt.layout != RFC3339 {
+				return
+			}
+
+			panicked = try(func() { got = MustParseRFC(tt.input) })
+			switch {
+			case !panicked && tt.wantPanic:
+				t.Errorf("MustParseRFC(%q) should not panicked", tt.input)
+
+			case panicked && !tt.wantPanic:
+				t.Errorf("MustParseRFC(%q) should not have panicked", tt.input)
+
+			case got != tt.want:
+				t.Errorf("MustParseRFC(%q) = %d, want %d", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClampFromUnix(t *testing.T) {
+	tests := []struct {
+		name  string
+		input int64
+		want  Date
+	}{
+		{
+			name:  "underflow",
+			input: -1,
+			want:  0,
+		},
+		{
+			name:  "zero",
+			input: 0,
+			want:  0,
+		},
+		{
+			name:  "last_moment_of_first_day",
+			input: 86399,
+			want:  0,
+		},
+		{
+			name:  "first_moment_of_second_day",
+			input: 86400,
+			want:  1,
+		},
+		{
+			name:  "max_minus_one",
+			input: maxUnix - 1,
+			want:  maxDate,
+		},
+		{
+			name:  "max",
+			input: maxUnix,
+			want:  maxDate,
+		},
+		{
+			name:  "overflow",
+			input: maxUnix + 1,
+			want:  maxDate,
+		},
+		{
+			name:  "ultra_max",
+			input: 1<<63 - 1,
+			want:  maxDate,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ClampFromUnix(tt.input)
+			if got != tt.want {
+				t.Errorf("ClampFromUnix(%d) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func isLastMinuteOfDay(t time.Time) bool {
+	return t.Hour() == 23 && t.Minute() == 59
+}
+
+func TestToday(t *testing.T) {
+	now := time.Now()
+	if isLastMinuteOfDay(now) {
+		t.Skip("skipping time-sensitive test near end of day")
+	}
+
+	got := Today()
+	want := ClampFromDate(now.Date())
+
+	if got != want {
+		t.Errorf("Today() = %q, want %q", got, want)
+	}
+}
+
+func TestTodayUTC(t *testing.T) {
+	now := time.Now().UTC()
+	if isLastMinuteOfDay(now) {
+		t.Skip("skipping time-sensitive test near end of day")
+	}
+
+	got := TodayUTC()
+	want := ClampFromDate(now.Date())
+
+	if got != want {
+		t.Errorf("Today() = %q, want %q", got, want)
+	}
+}
+
+func TestDate_String(t *testing.T) {
+	tests := []struct {
+		name  string
+		input Date
+		want  string
+	}{
+		{
+			name:  "zero",
+			input: 0,
+			want:  "1970-01-01",
+		},
+		{
+			name:  "max",
+			input: 65535,
+			want:  "2149-06-06",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.input.String()
+			if got != tt.want {
+				t.Errorf("%d.String() = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 type triple struct {
 	year  int
 	month time.Month
@@ -51,7 +262,7 @@ var extrema = []struct {
 	{65536 * day, false},
 }
 
-func TestEquivalences(t *testing.T) {
+func TestDate_equivalences(t *testing.T) {
 	for _, e := range equivs {
 		if unix, err := NewFromUnix(e.unix); err != nil {
 			t.Fatal(err)
@@ -65,7 +276,7 @@ func TestEquivalences(t *testing.T) {
 	}
 }
 
-func TestExtrema(t *testing.T) {
+func TestDate_extrema(t *testing.T) {
 	var desc string
 	for _, e := range extrema {
 		if UnixInRange(e.unix) != e.valid {
@@ -79,7 +290,7 @@ func TestExtrema(t *testing.T) {
 	}
 }
 
-func TestTimezoneIrrelevance(t *testing.T) {
+func TestDate_timezone_irrelevance(t *testing.T) {
 	const hour = 60 * 60
 	min := time.FixedZone("min", -12*hour)
 	max := time.FixedZone("max", +14*hour)
@@ -100,7 +311,7 @@ func TestTimezoneIrrelevance(t *testing.T) {
 	}
 }
 
-func TestDateToTime(t *testing.T) {
+func TestDate_UTC(t *testing.T) {
 	var date Date
 	local := date.Local()
 	utc := date.UTC()
@@ -112,7 +323,7 @@ func TestDateToTime(t *testing.T) {
 	}
 }
 
-func TestUnix(t *testing.T) {
+func TestDate_Unix(t *testing.T) {
 	var d Date = 1
 	const (
 		dayInSecs     = 60 * 60 * 24
@@ -126,7 +337,7 @@ func TestUnix(t *testing.T) {
 	}
 }
 
-func TestEncDec(t *testing.T) {
+func TestDate_MarshalText(t *testing.T) {
 	const (
 		unquoted = "1970-01-02"
 		quoted   = `"` + unquoted + `"`
@@ -156,6 +367,15 @@ func TestEncDec(t *testing.T) {
 		t.Error("Unexpected UnmarshalJSON error:", err)
 	} else if d != n {
 		t.Errorf("Expected Date(%d).UnmarshalJSON() to return %#q but got %#q", n, quoted, b)
+	}
+}
+
+func TestDate_UnmarshalText_error(t *testing.T) {
+	input := []byte("blah")
+	var d Date
+	err := d.UnmarshalText(input)
+	if err == nil {
+		t.Errorf("Date.UnmarshalText(%q) = nil, want error", input)
 	}
 }
 
